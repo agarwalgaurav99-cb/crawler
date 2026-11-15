@@ -100,7 +100,7 @@ go test -race ./...
   the real downloader, parser and filter end to end. `export_test.go` exposes
   the few unexported knobs (backoff factory, Retry-After cap, gate clock) to the
   external download test package.
-- **Production considerations:** For a public production crawler, add
+- ** Other Production considerations:** For a public production crawler, add
   `robots.txt` compliance, per-host crawl-delay tuning, persistent frontier
-  state for resume, metrics, and stronger SSRF guards.
+  state for resume, metrics.
 

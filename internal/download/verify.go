@@ -34,8 +34,7 @@ func (c Chain) Verify(ctx context.Context, r *Result) error {
 	return nil
 }
 
-// DefaultChecks returns the checks every downloader should apply: a successful
-// status, a final URL inside the allowed host, and a body inside the size limit.
+// DefaultChecks applies status, final-host, and body-size checks.
 func DefaultChecks(allowedHost string, maxBytes int64) Chain {
 	allowedHost = strings.ToLower(allowedHost)
 	return Chain{
@@ -69,14 +68,12 @@ func statusError(code int) error {
 	}
 }
 
-// retryableStatus reports whether a status code is worth retrying: server
-// errors and the explicit rate-limit response.
+// retryableStatus reports whether a status is worth retrying.
 func retryableStatus(code int) bool {
 	return code >= http.StatusInternalServerError || code == http.StatusTooManyRequests
 }
 
-// parseRetryAfter reads the Retry-After header, supporting both the
-// delta-seconds and HTTP-date forms. Unparseable or past values yield zero.
+// parseRetryAfter reads Retry-After (seconds or HTTP-date); invalid values yield zero.
 func parseRetryAfter(h http.Header) time.Duration {
 	return parseRetryAfterAt(h.Get("Retry-After"), time.Now())
 }

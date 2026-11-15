@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Gate is a shared pause that every worker honours before an attempt. It is
-// used to turn a host-wide 429 into a crawl-wide cool-down.
+// Gate pauses all workers before an attempt; a 429 turns into a crawl-wide cool-down.
 type Gate struct {
 	mu    sync.Mutex
 	until time.Time
@@ -36,8 +35,7 @@ func (g *Gate) Wait(ctx context.Context) error {
 	}
 }
 
-// Pause extends the current pause so it lasts at least d from now. A shorter
-// request never shortens an existing pause.
+// Pause extends the pause to at least d from now; it never shortens it.
 func (g *Gate) Pause(d time.Duration) {
 	if d <= 0 {
 		return

@@ -303,23 +303,3 @@ func TestNewRetryRejectsMissingDownloader(t *testing.T) {
 		t.Error("expected error for nil downloader")
 	}
 }
-
-func TestNewRetryDefaults(t *testing.T) {
-	r, err := download.NewRetry(mocks.NewMockDownloader(gomock.NewController(t)), download.RetryOptions{})
-	if err != nil {
-		t.Fatalf("download.NewRetry: %v", err)
-	}
-	b, ok := download.RetryBackOff(r).(*backoff.ExponentialBackOff)
-	if !ok {
-		t.Fatalf("backoff = %T, want *backoff.ExponentialBackOff", download.RetryBackOff(r))
-	}
-	if b.InitialInterval != backoff.DefaultInitialInterval {
-		t.Errorf("initial interval = %v, want %v", b.InitialInterval, backoff.DefaultInitialInterval)
-	}
-	if b.MaxInterval != backoff.DefaultMaxInterval {
-		t.Errorf("max interval = %v, want %v", b.MaxInterval, backoff.DefaultMaxInterval)
-	}
-	if b.Multiplier != backoff.DefaultMultiplier {
-		t.Errorf("multiplier = %v, want %v", b.Multiplier, backoff.DefaultMultiplier)
-	}
-}

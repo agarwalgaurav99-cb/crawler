@@ -18,8 +18,7 @@ import (
 // DefaultUserAgent identifies the crawler to servers.
 const DefaultUserAgent = "SimpleDomainCrawler/1.0"
 
-// drainLimit bounds how much of a rejected response body is read so the
-// underlying connection can be reused.
+// drainLimit caps how much of a rejected body is read to reuse the connection.
 const drainLimit = 64 << 10
 
 // HTTPOptions configures the http/https downloader.
@@ -109,8 +108,7 @@ func (d *HTTP) Download(ctx context.Context, u *url.URL) (*Result, error) {
 	defer resp.Body.Close()
 
 	if err := statusError(resp.StatusCode); err != nil {
-		// Drain a bounded amount so the transport can reuse the connection
-		// during error storms instead of re-dialling for every request.
+		// Drain so the connection can be reused.
 		io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
 		var de *Error
 		if errors.As(err, &de) && de.Retryable {

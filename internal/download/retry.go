@@ -14,10 +14,9 @@ import (
 
 const (
 	defaultMaxAttempts = 3
-	// maxRetryAfter bounds a server's Retry-After so one endpoint cannot stall
-	// a crawl.
+	// maxRetryAfter caps Retry-After so one endpoint can't stall the crawl.
 	maxRetryAfter = 5 * time.Second
-	// defaultRateLimitPause is used when a 429 carries no usable Retry-After.
+	// defaultRateLimitPause is used when a 429 has no usable Retry-After.
 	defaultRateLimitPause = time.Second
 )
 
@@ -26,13 +25,11 @@ type RetryOptions struct {
 	// MaxAttempts is the total number of attempts, including the first.
 	MaxAttempts int
 	Logger      *slog.Logger
-	// Gate, when set, is shared by every caller and pauses all workers after a
-	// 429 so the whole crawl backs off instead of hammering the host.
+	// Gate, when set, pauses all workers after a 429.
 	Gate *Gate
 }
 
-// Retry is a Downloader decorator that retries retryable failures with
-// exponential backoff, honouring Retry-After when present.
+// Retry wraps a Downloader and retries retryable failures with backoff.
 type Retry struct {
 	inner         Downloader
 	maxAttempts   int

@@ -8,9 +8,8 @@ import (
 	"strings"
 )
 
-// Normalize parses and canonicalizes an absolute http(s) URL. Scheme and
-// hostname are lowercased, default ports and fragments are removed, and an
-// empty path becomes "/". Credentials in the URL are rejected.
+// Normalize canonicalizes an absolute http(s) URL: lowercase scheme/host, strip
+// default port and fragment, empty path becomes "/". Rejects credentials.
 func Normalize(raw string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {

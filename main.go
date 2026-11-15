@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,11 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"example.com/monzo-crawler/internal/crawl"
+	"example.com/monzo-crawler/internal/app"
 	"example.com/monzo-crawler/internal/download"
-	"example.com/monzo-crawler/internal/filter"
-	"example.com/monzo-crawler/internal/parser"
-	"example.com/monzo-crawler/internal/urlx"
 )
 
 func main() {
@@ -38,61 +34,25 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
-	retryOpts := download.RetryOptions{
-		MaxAttempts: *retries,
-		Gate:        download.NewGate(),
-		Logger:      logger,
-	}
-	if err := run(flag.Arg(0), *workers, *maxPages, *timeout, *maxBytes, retryOpts, logger); err != nil {
-		logger.Error("crawl failed", "error", err)
-		os.Exit(1)
-	}
-}
-
-func run(raw string, workers, maxPages int, timeout time.Duration, maxBytes int64, retryOpts download.RetryOptions, logger *slog.Logger) error {
-	if retryOpts.MaxAttempts < 1 {
-		return fmt.Errorf("configuration error: retries must be at least 1")
-	}
-	start, err := urlx.Normalize(raw)
-	if err != nil {
-		return fmt.Errorf("invalid start URL: %w", err)
-	}
-	host := urlx.Hostname(start)
-
-	httpDownloader, err := download.NewHTTP(download.HTTPOptions{
-		AllowedHost: host,
-		Timeout:     timeout,
-		MaxBytes:    maxBytes,
-		MaxConns:    workers,
-		Checks:      download.DefaultChecks(host, maxBytes),
-	})
-	if err != nil {
-		return fmt.Errorf("configuration error: %w", err)
-	}
-
-	retrying, err := download.NewRetry(httpDownloader, retryOpts)
-	if err != nil {
-		return fmt.Errorf("configuration error: %w", err)
-	}
-
-	crawler, err := crawl.New(start, crawl.Options{Workers: workers, MaxPages: maxPages}, crawl.Deps{
-		Downloaders: download.NewRegistry(retrying),
-		Parser:      parser.HTML{},
-		Rules:       filter.Chain{filter.Scheme("http", "https"), filter.ExactHost(host)},
-		Sink:        crawl.NewStdoutSink(os.Stdout),
-		Logger:      logger,
-	})
-	if err != nil {
-		return fmt.Errorf("configuration error: %w", err)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	err = crawler.Run(ctx)
-	if errors.Is(err, context.Canceled) {
-		logger.Info("crawl interrupted")
-		return nil
+	err := app.Run(ctx, app.Options{
+		StartURL: flag.Arg(0),
+		Workers:  *workers,
+		MaxPages: *maxPages,
+		Timeout:  *timeout,
+		MaxBytes: *maxBytes,
+		Retry: download.RetryOptions{
+			MaxAttempts: *retries,
+			Gate:        download.NewGate(),
+			Logger:      logger,
+		},
+		Logger: logger,
+		Output: os.Stdout,
+	})
+	if err != nil {
+		logger.Error("crawl failed", "error", err)
+		os.Exit(1)
 	}
-	return err
 }

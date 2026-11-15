@@ -99,8 +99,7 @@ type result struct {
 	err       error
 }
 
-// Run crawls until the frontier is exhausted, the page budget is reached, or
-// ctx is cancelled. It returns ctx.Err() when cancelled.
+// Run crawls until the frontier empties, the budget is hit, or ctx is cancelled.
 func (c *Crawler) Run(ctx context.Context) error {
 	jobs := make(chan *url.URL)
 	results := make(chan result, c.opts.Workers)

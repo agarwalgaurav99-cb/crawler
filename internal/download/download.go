@@ -26,8 +26,7 @@ type Error struct {
 	Kind      Kind
 	Status    int
 	Retryable bool
-	// RetryAfter is the server-requested delay before the next attempt, taken
-	// from a Retry-After header. Zero means the server gave no hint.
+	// RetryAfter is the server-requested delay before the next attempt. Zero means none.
 	RetryAfter time.Duration
 	Err        error
 }
