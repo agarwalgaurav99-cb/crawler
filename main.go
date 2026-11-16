@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"example.com/monzo-crawler/internal/app"
-	"example.com/monzo-crawler/internal/download"
+	"example.com/monzo-crawler/internal/download/ratelimit"
+	"example.com/monzo-crawler/internal/download/retry"
 )
 
 func main() {
@@ -21,6 +22,8 @@ func main() {
 	maxPages := flag.Int("max-pages", 10000, "maximum number of unique URLs to schedule")
 	maxBytes := flag.Int64("max-bytes", 2_000_000, "maximum HTML response size in bytes")
 	retries := flag.Int("retries", 3, "total attempts for retryable failures")
+	rateLimit := flag.Float64("rate", ratelimit.DefaultMaxRate, "requests/sec ceiling shared across workers (AIMD start point)")
+	burst := flag.Int("burst", 1, "burst size for the rate limiter")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options] <starting-url>\n", os.Args[0])
 		flag.PrintDefaults()
@@ -43,11 +46,12 @@ func main() {
 		MaxPages: *maxPages,
 		Timeout:  *timeout,
 		MaxBytes: *maxBytes,
-		Retry: download.RetryOptions{
+		Retry: retry.Options{
 			MaxAttempts: *retries,
-			Gate:        download.NewGate(),
 			Logger:      logger,
 		},
+		Rate:   *rateLimit,
+		Burst:  *burst,
 		Logger: logger,
 		Output: os.Stdout,
 	})

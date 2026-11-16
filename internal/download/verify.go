@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
-	"time"
 )
 
 // Check is one named verification step applied to a download.
@@ -39,7 +36,7 @@ func DefaultChecks(allowedHost string, maxBytes int64) Chain {
 	allowedHost = strings.ToLower(allowedHost)
 	return Chain{
 		{Name: "status", Fn: func(_ context.Context, r *Result) error {
-			return statusError(r.Status)
+			return StatusError(r.Status)
 		}},
 		{Name: "final-host", Fn: func(_ context.Context, r *Result) error {
 			if r.Final == nil || !strings.EqualFold(r.Final.Hostname(), allowedHost) {
@@ -54,47 +51,6 @@ func DefaultChecks(allowedHost string, maxBytes int64) Chain {
 			return nil
 		}},
 	}
-}
-
-func statusError(code int) error {
-	if code >= http.StatusOK && code < http.StatusMultipleChoices {
-		return nil
-	}
-	return &Error{
-		Kind:      KindStatus,
-		Status:    code,
-		Retryable: retryableStatus(code),
-		Err:       fmt.Errorf("unexpected HTTP status %d", code),
-	}
-}
-
-// retryableStatus reports whether a status is worth retrying.
-func retryableStatus(code int) bool {
-	return code >= http.StatusInternalServerError || code == http.StatusTooManyRequests
-}
-
-// parseRetryAfter reads Retry-After (seconds or HTTP-date); invalid values yield zero.
-func parseRetryAfter(h http.Header) time.Duration {
-	return parseRetryAfterAt(h.Get("Retry-After"), time.Now())
-}
-
-func parseRetryAfterAt(value string, now time.Time) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0
-	}
-	if seconds, err := strconv.Atoi(value); err == nil {
-		if seconds <= 0 {
-			return 0
-		}
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		if d := at.Sub(now); d > 0 {
-			return d
-		}
-	}
-	return 0
 }
 
 func hostOf(u *url.URL) string {

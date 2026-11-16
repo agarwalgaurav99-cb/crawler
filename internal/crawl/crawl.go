@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/url"
 	"sync"
@@ -13,40 +12,9 @@ import (
 	"example.com/monzo-crawler/internal/download"
 	"example.com/monzo-crawler/internal/filter"
 	"example.com/monzo-crawler/internal/parser"
-	"example.com/monzo-crawler/internal/urlx"
+	"example.com/monzo-crawler/internal/sink"
+	"example.com/monzo-crawler/internal/state"
 )
-
-// Page is the crawl output for one successfully downloaded URL.
-type Page struct {
-	URL   string
-	Links []string
-}
-
-// Sink receives pages as they complete. Emit is called from one goroutine.
-//
-//go:generate go run go.uber.org/mock/mockgen@v0.6.0 -source=crawl.go -destination=../../mocks/crawl/crawl.go -package=mocks
-type Sink interface {
-	Emit(Page)
-}
-
-// StdoutSink prints pages in a human-readable format.
-type StdoutSink struct {
-	w io.Writer
-}
-
-// NewStdoutSink writes pages to w.
-func NewStdoutSink(w io.Writer) *StdoutSink {
-	return &StdoutSink{w: w}
-}
-
-// Emit implements Sink.
-func (s *StdoutSink) Emit(p Page) {
-	fmt.Fprintf(s.w, "URL: %s\nLinks:\n", p.URL)
-	for _, link := range p.Links {
-		fmt.Fprintf(s.w, "  - %s\n", link)
-	}
-	fmt.Fprintln(s.w)
-}
 
 // Options bounds the crawl.
 type Options struct {
@@ -59,7 +27,8 @@ type Deps struct {
 	Downloaders *download.Registry
 	Parser      parser.Parser
 	Rules       filter.Chain
-	Sink        Sink
+	Frontier    state.Frontier
+	Sink        sink.Sink
 	Logger      *slog.Logger
 }
 
@@ -84,6 +53,9 @@ func New(start *url.URL, opts Options, deps Deps) (*Crawler, error) {
 	if deps.Parser == nil {
 		return nil, fmt.Errorf("parser is required")
 	}
+	if deps.Frontier == nil {
+		return nil, fmt.Errorf("frontier is required")
+	}
 	if deps.Sink == nil {
 		return nil, fmt.Errorf("sink is required")
 	}
@@ -95,7 +67,7 @@ func New(start *url.URL, opts Options, deps Deps) (*Crawler, error) {
 
 type result struct {
 	requested *url.URL
-	page      Page
+	page      sink.Page
 	err       error
 }
 
@@ -125,14 +97,21 @@ func (c *Crawler) Run(ctx context.Context) error {
 		workers.Wait()
 	}()
 
-	queue := []*url.URL{c.start}
-	scheduled := map[string]struct{}{urlx.Key(c.start): {}}
+	if _, err := c.deps.Frontier.Add(c.start); err != nil {
+		return fmt.Errorf("seed frontier: %w", err)
+	}
+	scheduled := 1
 	active := 0
 
-	for len(queue) > 0 || active > 0 {
-		for len(queue) > 0 && active < c.opts.Workers {
-			next := queue[0]
-			queue = queue[1:]
+	for {
+		for active < c.opts.Workers {
+			next, ok, err := c.deps.Frontier.Next(ctx)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break
+			}
 			select {
 			case jobs <- next:
 				active++
@@ -146,7 +125,7 @@ func (c *Crawler) Run(ctx context.Context) error {
 		select {
 		case res := <-results:
 			active--
-			c.handle(res, &queue, scheduled)
+			c.handle(res, &scheduled)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -155,44 +134,54 @@ func (c *Crawler) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *Crawler) handle(res result, queue *[]*url.URL, scheduled map[string]struct{}) {
+func (c *Crawler) handle(res result, scheduled *int) {
 	if res.err != nil {
-		if errors.Is(res.err, context.Canceled) {
-			return
+		if !errors.Is(res.err, context.Canceled) {
+			c.deps.Logger.Warn("could not crawl", "url", res.requested.String(), "error", res.err)
 		}
-		c.deps.Logger.Warn("could not crawl", "url", res.requested.String(), "error", res.err)
+		c.markDone(res.requested)
 		return
 	}
 	c.deps.Sink.Emit(res.page)
+	c.markDone(res.requested)
+
 	for _, link := range c.deps.Rules.Filter(res.page.Links) {
-		key := urlx.Key(link)
-		if _, exists := scheduled[key]; exists {
-			continue
-		}
-		if len(scheduled) >= c.opts.MaxPages {
+		if *scheduled >= c.opts.MaxPages {
 			break
 		}
-		scheduled[key] = struct{}{}
-		*queue = append(*queue, link)
+		added, err := c.deps.Frontier.Add(link)
+		if err != nil {
+			c.deps.Logger.Warn("could not schedule", "url", link.String(), "error", err)
+			continue
+		}
+		if added {
+			(*scheduled)++
+		}
 	}
 }
 
-func (c *Crawler) fetch(ctx context.Context, u *url.URL) (Page, error) {
+func (c *Crawler) markDone(u *url.URL) {
+	if err := c.deps.Frontier.Done(u); err != nil {
+		c.deps.Logger.Warn("could not mark done", "url", u.String(), "error", err)
+	}
+}
+
+func (c *Crawler) fetch(ctx context.Context, u *url.URL) (sink.Page, error) {
 	downloader, err := c.deps.Downloaders.For(u)
 	if err != nil {
-		return Page{}, err
+		return sink.Page{}, err
 	}
 	res, err := downloader.Download(ctx, u)
 	if err != nil {
-		return Page{}, err
+		return sink.Page{}, err
 	}
-	page := Page{URL: res.Final.String()}
+	page := sink.Page{URL: res.Final.String()}
 	if res.Body == nil {
 		return page, nil
 	}
 	links, err := c.deps.Parser.Parse(ctx, res.Final, res.Body)
 	if err != nil {
-		return Page{}, err
+		return sink.Page{}, err
 	}
 	page.Links = links
 	return page, nil

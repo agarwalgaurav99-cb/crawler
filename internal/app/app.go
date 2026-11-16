@@ -12,8 +12,13 @@ import (
 
 	"example.com/monzo-crawler/internal/crawl"
 	"example.com/monzo-crawler/internal/download"
+	"example.com/monzo-crawler/internal/download/httpdown"
+	"example.com/monzo-crawler/internal/download/ratelimit"
+	"example.com/monzo-crawler/internal/download/retry"
 	"example.com/monzo-crawler/internal/filter"
 	"example.com/monzo-crawler/internal/parser"
+	"example.com/monzo-crawler/internal/sink"
+	"example.com/monzo-crawler/internal/state"
 	"example.com/monzo-crawler/internal/urlx"
 )
 
@@ -24,8 +29,12 @@ type Options struct {
 	MaxPages int
 	Timeout  time.Duration
 	MaxBytes int64
-	Retry    download.RetryOptions
-	Logger   *slog.Logger
+	Retry    retry.Options
+	// Rate is the requests/sec ceiling shared by all workers (AIMD start point);
+	// 0 uses ratelimit.DefaultMaxRate.
+	Rate   float64
+	Burst  int
+	Logger *slog.Logger
 	// Output receives discovered pages through the crawl sink. Defaults to
 	// os.Stdout when nil.
 	Output io.Writer
@@ -50,7 +59,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	host := urlx.Hostname(start)
 
-	httpDownloader, err := download.NewHTTP(download.HTTPOptions{
+	httpDownloader, err := httpdown.NewHTTP(httpdown.HTTPOptions{
 		AllowedHost: host,
 		Timeout:     opts.Timeout,
 		MaxBytes:    opts.MaxBytes,
@@ -61,7 +70,13 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("configuration error: %w", err)
 	}
 
-	retrying, err := download.NewRetry(httpDownloader, opts.Retry)
+	throttled := ratelimit.New(httpDownloader, ratelimit.Options{
+		MaxRate: opts.Rate,
+		Burst:   opts.Burst,
+		Logger:  opts.Logger,
+	})
+
+	retrying, err := retry.New(throttled, opts.Retry)
 	if err != nil {
 		return fmt.Errorf("configuration error: %w", err)
 	}
@@ -70,7 +85,8 @@ func Run(ctx context.Context, opts Options) error {
 		Downloaders: download.NewRegistry(retrying),
 		Parser:      parser.HTML{},
 		Rules:       filter.Chain{filter.Scheme("http", "https"), filter.ExactHost(host)},
-		Sink:        crawl.NewStdoutSink(opts.Output),
+		Frontier:    state.NewMemory(),
+		Sink:        sink.NewStdoutSink(opts.Output),
 		Logger:      opts.Logger,
 	})
 	if err != nil {

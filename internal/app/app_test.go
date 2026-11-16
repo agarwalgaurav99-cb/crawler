@@ -14,71 +14,8 @@ import (
 	"time"
 
 	"example.com/monzo-crawler/internal/app"
-	"example.com/monzo-crawler/internal/download"
+	"example.com/monzo-crawler/internal/download/retry"
 )
-
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-// runCrawl starts an httptest server serving mux, runs the full app.Run wiring
-// against it, and parses the emitted stdout into a map of page URL -> links.
-// mutate can override options before the run.
-func runCrawl(t *testing.T, mux *http.ServeMux, mutate func(*app.Options)) (string, map[string][]string) {
-	t.Helper()
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	opts := app.Options{
-		StartURL: srv.URL,
-		Workers:  4,
-		MaxPages: 100,
-		Timeout:  2 * time.Second,
-		MaxBytes: 1 << 20,
-		Retry: download.RetryOptions{
-			MaxAttempts: 3,
-			Logger:      discardLogger(),
-		},
-		Logger: discardLogger(),
-	}
-	if mutate != nil {
-		mutate(&opts)
-	}
-
-	var buf bytes.Buffer
-	opts.Output = &buf
-
-	if err := app.Run(context.Background(), opts); err != nil {
-		t.Fatalf("app.Run: %v", err)
-	}
-	return srv.URL, parseOutput(&buf)
-}
-
-// parseOutput decodes the StdoutSink format into page URL -> links.
-func parseOutput(out *bytes.Buffer) map[string][]string {
-	pages := make(map[string][]string)
-	var cur string
-	for _, line := range strings.Split(out.String(), "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		switch {
-		case strings.HasPrefix(line, "URL: "):
-			cur = strings.TrimPrefix(line, "URL: ")
-			pages[cur] = []string{}
-		case strings.HasPrefix(line, "  - ") && cur != "":
-			pages[cur] = append(pages[cur], strings.TrimPrefix(line, "  - "))
-		}
-	}
-	return pages
-}
-
-func contains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
 
 func TestRunCrawlsSiteGraphAndFilters(t *testing.T) {
 	mux := http.NewServeMux()
@@ -233,7 +170,7 @@ func TestRunCancellationReturnsNil(t *testing.T) {
 		MaxPages: 10,
 		Timeout:  time.Second,
 		MaxBytes: 1 << 20,
-		Retry:    download.RetryOptions{MaxAttempts: 1, Logger: discardLogger()},
+		Retry:    retry.Options{MaxAttempts: 1, Logger: discardLogger()},
 		Logger:   discardLogger(),
 		Output:   io.Discard,
 	})
@@ -253,7 +190,7 @@ func TestRunRejectsBadConfiguration(t *testing.T) {
 			MaxPages: 10,
 			Timeout:  time.Second,
 			MaxBytes: 1 << 20,
-			Retry:    download.RetryOptions{MaxAttempts: 1, Logger: discardLogger()},
+			Retry:    retry.Options{MaxAttempts: 1, Logger: discardLogger()},
 			Logger:   discardLogger(),
 			Output:   io.Discard,
 		}
@@ -269,4 +206,93 @@ func TestRunRejectsBadConfiguration(t *testing.T) {
 	if err := app.Run(context.Background(), opts(func(o *app.Options) { o.StartURL = "://bad" })); err == nil {
 		t.Error("expected error for invalid start URL")
 	}
+}
+
+func TestRunRetriesAfterThrottle(t *testing.T) {
+	var hits atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<p>home</p>`)
+	})
+	mux.HandleFunc("/throttled", func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			http.Error(w, "slow down", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<p>ok</p>`)
+	})
+
+	base, pages := runCrawl(t, mux, func(o *app.Options) {
+		o.StartURL = o.StartURL + "/throttled"
+	})
+
+	if _, ok := pages[base+"/throttled"]; !ok {
+		t.Errorf("throttled page not crawled after cool-down; got %v", pages)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
+	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// runCrawl serves mux, runs app.Run, and returns the base URL and parsed pages.
+func runCrawl(t *testing.T, mux *http.ServeMux, mutate func(*app.Options)) (string, map[string][]string) {
+	t.Helper()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	opts := app.Options{
+		StartURL: srv.URL,
+		Workers:  4,
+		MaxPages: 100,
+		Timeout:  2 * time.Second,
+		MaxBytes: 1 << 20,
+		Retry: retry.Options{
+			MaxAttempts: 3,
+			Logger:      discardLogger(),
+		},
+		Logger: discardLogger(),
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+
+	var buf bytes.Buffer
+	opts.Output = &buf
+
+	if err := app.Run(context.Background(), opts); err != nil {
+		t.Fatalf("app.Run: %v", err)
+	}
+	return srv.URL, parseOutput(&buf)
+}
+
+// parseOutput decodes the StdoutSink format into page URL -> links.
+func parseOutput(out *bytes.Buffer) map[string][]string {
+	pages := make(map[string][]string)
+	var cur string
+	for _, line := range strings.Split(out.String(), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "URL: "):
+			cur = strings.TrimPrefix(line, "URL: ")
+			pages[cur] = []string{}
+		case strings.HasPrefix(line, "  - ") && cur != "":
+			pages[cur] = append(pages[cur], strings.TrimPrefix(line, "  - "))
+		}
+	}
+	return pages
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
