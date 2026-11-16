@@ -8,7 +8,7 @@ channels — no crawling framework.
 - **Dependencies:** [`golang.org/x/net/html`](https://pkg.go.dev/golang.org/x/net/html) (parsing), [`golang.org/x/time/rate`](https://pkg.go.dev/golang.org/x/time/rate) (throttling), [`github.com/cenkalti/backoff/v5`](https://pkg.go.dev/github.com/cenkalti/backoff/v5) (retries)
 - **Module:** `example.com/monzo-crawler`
 
-There is a single process (`main.go`). Its one job is to drive a **download
+There is a single process (`cmd/crawler`). Its one job is to drive a **download
 decorator chain**, outermost first:
 
 | Layer              | Package             | Responsibility                                     |
@@ -21,7 +21,7 @@ decorator chain**, outermost first:
 
 ```
 .
-├── main.go                 # flags, signal handling, wiring
+├── cmd/crawler/            # flags, signal handling, wiring
 ├── internal/
 │   ├── app/                # Run(): assembles the whole chain
 │   ├── crawl/              # frontier loop + worker pool
@@ -84,13 +84,13 @@ go build ./...
 ### 2. Crawl
 
 ```bash
-go run . https://crawlme.monzo.com/
+go run ./cmd/crawler https://crawlme.monzo.com/
 ```
 
 ### 3. Tune the limits
 
 ```bash
-go run . --workers 8 --timeout 10s --max-pages 10000 \
+go run ./cmd/crawler --workers 8 --timeout 10s --max-pages 10000 \
   --max-bytes 2000000 --retries 3 https://crawlme.monzo.com/
 ```
 
@@ -100,7 +100,7 @@ go run . --workers 8 --timeout 10s --max-pages 10000 \
 token bucket burst; the AIMD controller lowers the rate on back-pressure.
 
 ```bash
-go run . --rate 5 --burst 2 https://crawlme.monzo.com/
+go run ./cmd/crawler --rate 5 --burst 2 https://crawlme.monzo.com/
 ```
 
 ### 5. Read the output

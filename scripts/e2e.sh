@@ -22,7 +22,7 @@ trap cleanup EXIT
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 1; }
 
 echo "==> building crawler"
-(cd "$root" && "$GO" build -o "$workdir/crawler" .)
+(cd "$root" && "$GO" build -o "$workdir/crawler" ./cmd/crawler)
 
 cat >"$workdir/server.py" <<'PY'
 import sys
